@@ -1,5 +1,0 @@
-.vscode
-profile_test.go
-
-*.wal,
-*.db

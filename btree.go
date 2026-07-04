@@ -8,7 +8,7 @@ import (
 
 // --- Minimal B-tree with splitting ---
 
-const btreeMinDegree = 16 
+const btreeMinDegree = 16
 
 type btreeNode struct {
 	leaf   bool
@@ -151,7 +151,7 @@ func (t *BTree) LoadFromFile(filename string) error {
 }
 
 func (t *BTree) DebugPrint() {
-	// fmt.Println("BTree dump:") 
+	// fmt.Println("BTree dump:")
 	btreeDebugPrint(t.root, 0)
 }
 
@@ -159,7 +159,7 @@ func btreeDebugPrint(n *btreeNode, level int) {
 	if n == nil {
 		return
 	}
-	// fmt.Printf("%sKeys: %v\n", indent(level), n.keys) 
+	// fmt.Printf("%sKeys: %v\n", indent(level), n.keys)
 	if !n.leaf {
 		for _, c := range n.child {
 			btreeDebugPrint(c, level+1)
@@ -170,4 +170,25 @@ func btreeDebugPrint(n *btreeNode, level int) {
 func indent(n int) string {
 	return strings.Repeat("  ", n)
 }
+func (t *BTree) PrefixScan(prefix string) map[string]string {
+	result := make(map[string]string)
+	btreePrefixScan(t.root, prefix, result)
+	return result
+}
 
+func btreePrefixScan(n *btreeNode, prefix string, result map[string]string) {
+	if n == nil {
+		return
+	}
+	for i, k := range n.keys {
+		if !n.leaf {
+			btreePrefixScan(n.child[i], prefix, result)
+		}
+		if strings.HasPrefix(k, prefix) {
+			result[k] = n.values[i]
+		}
+	}
+	if !n.leaf {
+		btreePrefixScan(n.child[len(n.child)-1], prefix, result)
+	}
+}

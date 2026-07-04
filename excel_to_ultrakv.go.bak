@@ -1,0 +1,167 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+
+	"github.com/xuri/excelize/v2"
+)
+
+// Assumes kvstore_ultra.go defines NewUltraKV, kv.Set, kv.flushCh etc.
+// Those are used directly. See your UltraKV implementation.
+
+func loadExcelToKV(kv *UltraKV, path, sheet, keyCol string, valueCols []string, chunkSize int) error {
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// choose sheet
+	if sheet == "" {
+		sheets := f.GetSheetList()
+		if len(sheets) == 0 {
+			return fmt.Errorf("no sheets in file")
+		}
+		sheet = sheets[0]
+	}
+
+	rows, err := f.Rows(sheet)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// read header
+	if !rows.Next() {
+		return fmt.Errorf("sheet empty")
+	}
+	headerRow, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	headers := make([]string, len(headerRow))
+	for i, h := range headerRow {
+		headers[i] = strings.TrimSpace(h)
+	}
+
+	// header->index map
+	idx := map[string]int{}
+	for i, h := range headers {
+		idx[h] = i
+	}
+
+	// if valueCols not specified, use all except keyCol
+	if len(valueCols) == 0 {
+		for _, h := range headers {
+			if h == keyCol {
+				continue
+			}
+			valueCols = append(valueCols, h)
+		}
+	}
+
+	rowNum := 1 // header consumed
+	count := 0
+	for rows.Next() {
+		rowNum++
+		rec, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		get := func(i int) string {
+			if i < 0 || i >= len(rec) {
+				return ""
+			}
+			return rec[i]
+		}
+
+		// key
+		var key string
+		if keyCol != "" {
+			if pos, ok := idx[keyCol]; ok {
+				k := strings.TrimSpace(get(pos))
+				if k == "" {
+					key = fmt.Sprintf("row:%d", rowNum)
+				} else {
+					key = k
+				}
+			} else {
+				key = fmt.Sprintf("row:%d", rowNum)
+			}
+		} else {
+			key = fmt.Sprintf("row:%d", rowNum)
+		}
+
+		// build JSON value
+		m := map[string]string{}
+		for _, col := range valueCols {
+			if pos, ok := idx[col]; ok {
+				m[col] = get(pos)
+			} else {
+				m[col] = ""
+			}
+		}
+		b, _ := json.Marshal(m)
+		val := string(b)
+
+		// write to UltraKV
+		kv.Set(key, val)
+		count++
+
+		// chunk flush
+		if chunkSize > 0 && count%chunkSize == 0 {
+			select {
+			case kv.flushCh <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	// final flush
+	select {
+	case kv.flushCh <- struct{}{}:
+	default:
+	}
+
+	log.Printf("Import completed: %d rows\n", count)
+	return nil
+}
+
+func main() {
+	excelPath := flag.String("file", "data.xlsx", "path to excel file")
+	sheet := flag.String("sheet", "", "sheet name (default: first sheet)")
+	keyCol := flag.String("key", "id", "header name to use as key (empty => row:<n>)")
+	cols := flag.String("cols", "", "comma-separated list of columns to include as value (empty => all except key)")
+	chunk := flag.Int("chunk", 1000, "flush chunk size (0 => no periodic flush)")
+	dbFile := flag.String("btree", "mydb.btree", "btree snapshot file")
+	walFile := flag.String("wal", "mydb.wal", "wal file")
+	flag.Parse()
+
+	// create/open DB
+	kv, err := NewUltraKV(*dbFile, *walFile)
+	if err != nil {
+		log.Fatalf("failed to open UltraKV: %v", err)
+	}
+	defer kv.Close()
+
+	var valueCols []string
+	if strings.TrimSpace(*cols) != "" {
+		for _, c := range strings.Split(*cols, ",") {
+			valueCols = append(valueCols, strings.TrimSpace(c))
+		}
+	}
+
+	if err := loadExcelToKV(kv, *excelPath, *sheet, *keyCol, valueCols, *chunk); err != nil {
+		log.Fatalf("import failed: %v", err)
+	}
+
+	// optional: wait for user input before exit so background flusher finishes (or rely on defer kv.Close())
+	fmt.Println("Import done. Press Enter to exit.")
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
+}

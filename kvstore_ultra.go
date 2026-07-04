@@ -64,10 +64,6 @@ func NewUltraKV(btreePath, walPath string) (*UltraKV, error) {
 
 	// cons : for larger  datasets, WAL replay can be slower than loading a pre-built B-Tree
 
-	
-
-
-
 	walFile, err := os.OpenFile(walPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
@@ -452,4 +448,24 @@ func (kv *UltraKV) Clear() error {
 	}
 	kv.walFile = walFile
 	return nil
+}
+func (kv *UltraKV) PrefixScan(prefix string) map[string]string {
+	result := make(map[string]string)
+
+	kv.lock.Lock()
+	btreeResults := kv.btree.PrefixScan(prefix)
+	kv.lock.Unlock()
+	for k, v := range btreeResults {
+		result[k] = v
+	}
+
+	kv.cacheLock.RLock()
+	for k, v := range kv.cache {
+		if strings.HasPrefix(k, prefix) {
+			result[k] = v
+		}
+	}
+	kv.cacheLock.RUnlock()
+
+	return result
 }
