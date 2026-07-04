@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -96,6 +97,11 @@ func main() {
 
 	http.HandleFunc("/kv/", kvHandler)
 
-	fmt.Println("GOD-B HTTP server running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	fmt.Printf("GOD-B HTTP server running on :%s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
